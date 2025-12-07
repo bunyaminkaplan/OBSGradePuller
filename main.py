@@ -1,9 +1,20 @@
 import os
 import sys
 
-# --- 1. AYARLAR (EN TEPEDE) ---
-# Playwright'a diyoruz ki: "Kanki hayal görme, tarayıcılar bilgisayarın AppData klasöründe."
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.getenv('LOCALAPPDATA'), 'ms-playwright')
+# --- 1. AYARLAR ---
+# Tarayıcıların kurulacağı yolu işletim sistemine göre seçiyoruz.
+if sys.platform == "win32":
+    # Windows
+    base_path = os.getenv('LOCALAPPDATA')
+elif sys.platform == "darwin":
+    # macOS (Library/Caches genelde bu işler içindir)
+    base_path = os.path.join(os.path.expanduser("~"), "Library", "Caches")
+else:
+    # Linux
+    base_path = os.path.join(os.path.expanduser("~"), ".cache")
+
+# Playwright'a yolu göster
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(base_path, 'ms-playwright')
 
 # --- DİĞER IMPORTLAR ---
 import asyncio

@@ -1,32 +1,34 @@
-import asyncio
 import os
+import sys
 
+# --- 1. AYARLAR (EN TEPEDE) ---
+# Playwright'a diyoruz ki: "Kanki hayal görme, tarayıcılar bilgisayarın AppData klasöründe."
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.getenv('LOCALAPPDATA'), 'ms-playwright')
 
+# --- DİĞER IMPORTLAR ---
+import asyncio
 import platform
 import subprocess
 import json
+import time
+import keyring # Şifreleri güvenli saklamak için
 from typing import List, Callable, Optional
 from dataclasses import dataclass, asdict
-import keyring
 
-from playwright.async_api import async_playwright
+# Playwright Installer
+from playwright.__main__ import main as playwright_cli
+from playwright.async_api import async_playwright, Error as PlaywrightError
+
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
 
+# --- 2. HATA SINIFLARI ---
+class CaptchaError(Exception): pass
+class CredentialError(Exception): pass
 
-# --- 1. ÖZEL HATA SINIFLARI (Exception Handling) ---
-class CaptchaError(Exception):
-    """Sadece Captcha yanlış girildiğinde fırlatılır."""
-    pass
-
-class CredentialError(Exception):
-    """Kullanıcı adı veya şifre yanlış olduğunda fırlatılır."""
-    pass
-
-# --- 2. VERİ MODELLERİ ---
+# --- 3. VERİ MODELLERİ ---
 @dataclass
 class StudentGrade:
     course_name: str
@@ -39,63 +41,52 @@ class UserConfig:
     username: str
     password: str
 
-# --- 3. CONFIG MANAGER (KEYRING VERSİYONU) ---
+# --- 4. CONFIG MANAGER (KEYRING SİSTEMİ) ---
 class ConfigManager:
-    # Bu isimle Windows Kasa'sına kayıt açacak
-    SERVICE_ID = "MTUOBSGradePuller_Scraper" 
-    # Kullanıcı adı ve şifreyi tek string olarak birleştirip saklayacağız (Basitlik için)
-    # Format: "kullaniciadi|sifre"
-
+    # Windows Kasası'nda bu isimle saklayacağız
+    SERVICE_ID = "UniNotSistemi_App" 
+    
     @staticmethod
     def load() -> Optional[UserConfig]:
         try:
-            # İşletim sisteminden "user_data" anahtarını iste
-            stored_data = keyring.get_password(ConfigManager.SERVICE_ID, "user_data")
+            # Kasadan veriyi iste
+            data = keyring.get_password(ConfigManager.SERVICE_ID, "user_data")
+            if not data: return None
             
-            if not stored_data:
-                return None
-            
-            # Veriyi "|" işaretinden ayır
-            username, password = stored_data.split("|", 1)
+            # Veriyi ayır (user|pass)
+            username, password = data.split("|", 1)
             return UserConfig(username, password)
-        except:
-            return None
+        except: return None
 
     @staticmethod
     def save(config: UserConfig):
-        # Veriyi birleştir: "123456|sifrem123"
-        combined_data = f"{config.username}|{config.password}"
-        
-        # Windows kasasına kaydet
-        keyring.set_password(ConfigManager.SERVICE_ID, "user_data", combined_data)
+        # Veriyi birleştir ve kilitle
+        combined = f"{config.username}|{config.password}"
+        keyring.set_password(ConfigManager.SERVICE_ID, "user_data", combined)
 
     @staticmethod
     def delete():
         try:
             keyring.delete_password(ConfigManager.SERVICE_ID, "user_data")
-        except:
-            pass # Zaten yoksa hata vermesin
+        except: pass
 
-# --- 4. ARAYÜZ KATMANI (UI) ---
+# --- 5. ARAYÜZ KATMANI (UI) ---
 class TerminalUI:
     def __init__(self):
         self.console = Console()
 
     def show_captcha(self, image_path: str) -> str:
-        self.console.print(f"[yellow]! Güvenlik resmi açılıyor...[/yellow]")
+        self.console.print(f"[yellow]! Captcha güvenlik resmi açılıyor...[/yellow]")
         
-        if platform.system() == "Windows":
-            os.startfile(image_path)
-        elif platform.system() == "Darwin":
-            subprocess.call(("open", image_path))
-        else:
-            subprocess.call(("xdg-open", image_path))
+        if platform.system() == "Windows": os.startfile(image_path)
+        elif platform.system() == "Darwin": subprocess.call(("open", image_path))
+        else: subprocess.call(("xdg-open", image_path))
 
-        return Prompt.ask("[bold cyan]Resimdeki kodu girin[/bold cyan]")
+        return Prompt.ask("[bold cyan]Resimdeki işlemin sonucunu girin[/bold cyan]")
 
     def display_grades(self, grades: List[StudentGrade]):
         if not grades:
-            self.console.print("[red]Görüntülenecek not bulunamadı![/red]")
+            self.console.print("[red]Görüntülenecek not bulunamadı.[/red]")
             return
 
         table = Table(title="🎓 Dönem Notları", border_style="blue", header_style="bold magenta")
@@ -105,7 +96,12 @@ class TerminalUI:
         table.add_column("Harf", justify="center", style="bold")
 
         for grade in grades:
-            color = "red" if grade.letter_grade in ["FF", "FD", "DZ"] else "green"
+            # A1, A2 sistemi için renklendirme mantığı:
+            # F ile başlayanlar (F1, F2, FF) veya DZ (Devamsız) ise Kırmızı.
+            # Diğerleri (A1, B2, C1 vs.) Yeşil.
+            is_fail = grade.letter_grade.startswith("F") or grade.letter_grade in ["DZ", "YZ", "BS"];
+            color = "red" if is_fail else "green"
+            
             formatted_grade = f"[{color}]{grade.letter_grade}[/{color}]"
             table.add_row(grade.course_name, grade.midterm, grade.final, formatted_grade)
 
@@ -120,12 +116,25 @@ class TerminalUI:
     def show_warning(self, message: str):
         self.console.print(f"[bold yellow]⚠️ {message}[/bold yellow]")
 
-# --- 5. SCRAPER SERVİSİ (Logic) ---
+# --- 6. OTO-KURULUM MODÜLÜ ---
+def ensure_browsers_installed(ui: TerminalUI):
+    browser_path = os.environ["PLAYWRIGHT_BROWSERS_PATH"]
+    # Klasör yoksa veya boşsa indir
+    if not os.path.exists(browser_path) or not os.listdir(browser_path):
+        ui.console.print(Panel("[bold yellow]İlk çalıştırma: Gerekli tarayıcı motorları indiriliyor...\nBu işlem bir kez yapılır, lütfen kapatmayın![/bold yellow]", title="Kurulum"))
+        try:
+            playwright_cli(["install", "chromium"])
+            ui.show_success("Kurulum tamamlandı!")
+        except Exception as e:
+            ui.show_error(f"Kurulum hatası: {e}")
+            sys.exit(1)
+
+# --- 7. SCRAPER SERVİSİ ---
 class UniversityScraper:
     def __init__(self, login_url: str):
         self.login_url = login_url
 
-    async def fetch_grades(self, user_config: UserConfig, captcha_callback: Callable[[str], str]) -> List[StudentGrade]:
+    async def fetch_grades(self, user_config: UserConfig, ui: TerminalUI) -> List[StudentGrade]:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(viewport={"width": 1920, "height": 1080})
@@ -133,166 +142,137 @@ class UniversityScraper:
 
             try:
                 # --- A. GİRİŞ İŞLEMLERİ ---
-                print("Login sayfasına gidiliyor...")
-                await page.goto(self.login_url)
-                
-                await page.fill("#txtParamT01", user_config.username)
+                with ui.console.status("[bold green]Öğrenci bilgi sistemine bağlanılıyor...[/bold green]", spinner="dots"):
+                    await page.goto(self.login_url)
+                    await page.fill("#txtParamT01", user_config.username)
+                    
+                    await page.click("#txtParamT02", force=True)
+                    await page.evaluate("document.getElementById('txtParamT02').removeAttribute('readonly')")
+                    await page.fill("#txtParamT02", user_config.password)   
 
-                # Şifre kilidini kır ve yaz
-                await page.click("#txtParamT02", force=True)
-                await page.evaluate("document.getElementById('txtParamT02').removeAttribute('readonly')")
-                await page.fill("#txtParamT02", user_config.password)   
-
-                # Captcha varsa hallet
+                # Captcha Kontrolü
                 if await page.locator("#imgCaptchaImg").count() > 0:
                     temp_img = "captcha.png"
                     await page.locator("#imgCaptchaImg").screenshot(path=temp_img)
-                    code = captcha_callback(temp_img) 
                     
-                    # Captcha'yı yazıyoruz
+                    code = ui.show_captcha(temp_img) 
+                    
                     await page.fill("#txtSecCode", code) 
-                    
-                    # Site bazen input'tan çıkınca (blur) işlem yapıyor, tetiklemek için boş yere tıkla
-                    await page.click("body", force=True)
-
+                    await page.click("body", force=True) 
                     if os.path.exists(temp_img): os.remove(temp_img)
 
-                # --- DÜZELTME: BUTON BEKLEME ---
-                print("Giriş butonunun aktif olması bekleniyor...")
-                # CSS Selector Mantığı: ID'si btnLogin olan AMA class'ında 'disabled' OLMAYAN elementi bekle.
-                try:
-                    await page.wait_for_selector("#btnLogin:not(.disabled)", state="visible", timeout=15000)
-                except:
-                    print("⚠️ Uyarı: Buton hala 'disabled' görünüyor, yine de şansımızı deniyoruz...")
-
-                print("Giriş butonuna basıldı, yanıt bekleniyor...")
-                # force=True ekledik ki önünde görünmez bir engel varsa bile bassın
-                await page.click("#btnLogin", force=True) 
-                
-                # --- AKILLI BEKLEME (POLLING) BAŞLANGICI ---
-                max_retries = 20
-                login_success = False
-                
-                for _ in range(max_retries):
-                    # 1. Başarılı Giriş Kontrolü
-                    if "login.aspx" not in page.url:
-                        login_success = True
-                        print("URL değişti, giriş başarılı kabul ediliyor.")
-                        break
-
-                    # 2. Hata Mesajı Kontrolü
+                with ui.console.status("[bold green]Giriş yapılıyor...[/bold green]", spinner="earth"):
+                    # Butonun aktif olmasını bekle
                     try:
-                        body_text = (await page.inner_text("body")).lower()
-                        
-                        if "güvenlik kodu hatalı" in body_text or "hatalı girildi" in body_text:
-                            raise CaptchaError("Güvenlik kodu (Captcha) yanlış girildi.")
-                        
-                        if ("kullanıcı adı" in body_text or "şifre" in body_text) and "hatalı" in body_text:
-                            raise CredentialError("Öğrenci numarası veya şifre hatalı.")
-                        
-                        if await page.locator(".swal2-content").count() > 0:
-                            popup_text = (await page.locator(".swal2-content").inner_text()).lower()
-                            if "güvenlik" in popup_text:
-                                raise CaptchaError("Güvenlik kodu yanlış girildi.")
-                            if "şifre" in popup_text or "kullanıcı" in popup_text:
-                                raise CredentialError("Bilgiler hatalı.")
+                        await page.wait_for_selector("#btnLogin:not(.disabled)", state="visible", timeout=15000)
+                    except: pass
 
-                    except (CaptchaError, CredentialError):
-                        raise
-                    except:
-                        pass
+                    await page.click("#btnLogin", force=True) 
+                    
+                    # --- POLLING (AKILLI BEKLEME) ---
+                    max_retries = 20
+                    login_success = False
+                    
+                    for _ in range(max_retries):
+                        if "login.aspx" not in page.url:
+                            login_success = True
+                            break
 
-                    await page.wait_for_timeout(500)
-
-                if "login.aspx" in page.url and not login_success:
-                    raise Exception("Giriş zaman aşımına uğradı veya buton tepki vermedi.")
-                
-                # --- AKILLI BEKLEME BİTİŞİ ---
-
-                print("Giriş başarılı! Menüye gidiliyor...")
-
-                # --- C. MENÜYE GİTME (Native Click) ---
-                target_link = page.locator("a:has-text('Not Listesi')")
-                await target_link.wait_for(state="attached", timeout=10000)
-                await target_link.evaluate("element => element.click()")
-
-                # --- D. POPUP SAVAR ---
-                try:
-                    popup_btn = page.locator("button.swal2-confirm")
-                    if await popup_btn.count() > 0:
-                         await popup_btn.click(timeout=2000)
-                         await page.wait_for_timeout(500)
-                except:
-                    pass 
-
-                # --- E. IFRAME İÇİNDE TABLO ARAMA ---
-                print("Tablo aranıyor...")
-                content_frame = None
-                
-                try:
-                    await page.wait_for_selector("#grd_not_listesi", state="attached", timeout=2000)
-                    content_frame = page
-                except:
-                    pass
-
-                if not content_frame:
-                    for frame in page.frames:
+                        # Hata Analizi
                         try:
-                            if await frame.locator("#grd_not_listesi").count() > 0:
-                                content_frame = frame
-                                break
-                        except:
-                            continue
+                            body_text = (await page.inner_text("body")).lower()
+                            if "güvenlik kodu hatalı" in body_text or "hatalı girildi" in body_text:
+                                raise CaptchaError("Güvenlik kodu (Captcha) yanlış girildi.")
+                            
+                            if ("kullanıcı adı" in body_text or "şifre" in body_text) and "hatalı" in body_text:
+                                raise CredentialError("Öğrenci numarası veya şifre hatalı.")
+                            
+                            if await page.locator(".swal2-content").count() > 0:
+                                popup_text = (await page.locator(".swal2-content").inner_text()).lower()
+                                if "güvenlik" in popup_text: raise CaptchaError("Güvenlik kodu yanlış.")
+                                if "şifre" in popup_text: raise CredentialError("Bilgiler hatalı.")
+                        except (CaptchaError, CredentialError):
+                            raise
+                        except: pass
+
+                        await page.wait_for_timeout(500)
+
+                    if "login.aspx" in page.url and not login_success:
+                        raise Exception("Giriş zaman aşımına uğradı.")
                 
-                if not content_frame:
-                    raise Exception("Tablo bulunamadı! (Giriş yapılmış olsa bile tablo yüklenmedi)")
+                # --- MENÜ VE POPUP İŞLEMLERİ ---
+                with ui.console.status("[bold cyan]Menüler geziliyor ve popup'lar kapatılıyor...[/bold cyan]", spinner="bouncingBall"):
+                    # Menü Tıklama
+                    target_link = page.locator("a:has-text('Not Listesi')")
+                    await target_link.wait_for(state="attached", timeout=10000)
+                    await target_link.evaluate("element => element.click()")
 
-                # --- F. VERİYİ OKUMA ---
-                rows = await content_frame.locator("#grd_not_listesi tbody tr").all()
-                grades = []
+                    # Popup'ı Kapat
+                    try:
+                        popup_btn = page.locator("button.swal2-confirm")
+                        if await popup_btn.count() > 0:
+                             await popup_btn.click(timeout=2000)
+                             await page.wait_for_timeout(500)
+                    except: pass 
 
-                for row in rows:
-                    cols = await row.locator("td").all()
-                    if len(cols) > 5:
-                        course_text = await cols[2].inner_text()
-                        if not course_text.strip() or "Ders Adı" in course_text: continue
+                    # Not Tablosu Arama (Iframe Dahil)
+                    content_frame = None
+                    try:
+                        await page.wait_for_selector("#grd_not_listesi", state="attached", timeout=2000)
+                        content_frame = page
+                    except: pass
 
-                        course = course_text.strip()
-                        exam_info = (await cols[4].inner_text()).strip() 
-                        letter = (await cols[6].inner_text()).strip()
-                        
-                        midterm = "-"
-                        if "Vize" in exam_info:
-                            parts = exam_info.split(":")
-                            if len(parts) > 1: midterm = parts[1].strip().split()[0]
+                    if not content_frame:
+                        for frame in page.frames:
+                            try:
+                                if await frame.locator("#grd_not_listesi").count() > 0:
+                                    content_frame = frame
+                                    break
+                            except: continue
+                    
+                    if not content_frame:
+                        raise Exception("Not tablosu bulunamadı!")
 
-                        final = "-"
-                        if not letter: letter = "--"
+                    # Veriyi Okuma
+                    rows = await content_frame.locator("#grd_not_listesi tbody tr").all()
+                    grades = []
 
-                        grades.append(StudentGrade(course, midterm, final, letter))
-                
-                return grades
+                    for row in rows:
+                        cols = await row.locator("td").all()
+                        if len(cols) > 5:
+                            course_text = await cols[2].inner_text()
+                            if not course_text.strip() or "Ders Adı" in course_text: continue
+                            
+                            course = course_text.strip()
+                            exam_info = (await cols[4].inner_text()).strip() 
+                            letter = (await cols[6].inner_text()).strip()
+                            midterm = exam_info.split(":")[1].strip().split()[0] if "Vize" in exam_info and ":" in exam_info else "-"
+                            final = "-"
+                            if not letter: letter = "--"
+                            grades.append(StudentGrade(course, midterm, final, letter))
+                    
+                    return grades
 
-            except (CaptchaError, CredentialError):
-                raise 
-            except Exception as e:
-                raise e
-            finally:
-                await browser.close()
+            except (CaptchaError, CredentialError): raise 
+            except Exception as e: raise e
+            finally: await browser.close()
 
-# --- 6. ANA PROGRAM (YENİ AKIŞ) ---
+# --- 8. ANA PROGRAM ---
 async def main():
     ui = TerminalUI()
+    
+    # --- Tarayıcı Kontrolü ---
+    ensure_browsers_installed(ui)
+
     scraper = UniversityScraper(login_url="https://obs.ozal.edu.tr/oibs/std/login.aspx")
 
-    # --- DIŞ DÖNGÜ: KİMLİK BİLGİLERİ ---
     while True:
-        # 1. Config Yükle veya İste
+        # Config Manager artık Keyring kullanıyor
         user_config = ConfigManager.load()
         is_from_file = True
 
         if user_config:
-            ui.console.print(f"\n[green]Kayıtlı kullanıcı: {user_config.username}[/green]")
+            ui.console.print(f"\n[green]Kayıtlı kullanıcı bulundu: {user_config.username}[/green]")
             if not Confirm.ask("Bu kullanıcı ile devam edilsin mi?"):
                 ConfigManager.delete()
                 user_config = None
@@ -304,55 +284,42 @@ async def main():
             username = Prompt.ask("Öğrenci No")
             password = Prompt.ask("Şifre", password=True)
             user_config = UserConfig(username, password)
-            # DİKKAT: Burada hemen kaydetmiyoruz! Giriş başarılı olursa kaydedeceğiz.
 
-        # --- İÇ DÖNGÜ: CAPTCHA / GİRİŞ DENEMESİ ---
         while True:
-            ui.console.print("\n[yellow]Sisteme bağlanılıyor...[/yellow]")
-            
             try:
-                # Scraper'ı çalıştır
-                grades = await scraper.fetch_grades(user_config, ui.show_captcha)
+                grades = await scraper.fetch_grades(user_config, ui)
                 
-                # --- BAŞARILI OLURSA ---
-                ui.show_success("Giriş Başarılı! Notlar alındı.")
+                ui.show_success("Notlar başarıyla çekildi.")
                 ui.display_grades(grades)
 
-                # Eğer dosyalardan gelmediyse (yeni girişse) ve başarılı olduysa ŞİMDİ KAYDET
                 if not is_from_file:
-                    if Confirm.ask("Bilgiler 'user_config.json' dosyasına kaydedilsin mi?"):
+                    if Confirm.ask("Bilgiler güvenli kasaya (Keyring) kaydedilsin mi?"):
                         ConfigManager.save(user_config)
                         ui.show_success("Bilgiler kaydedildi.")
                 
-                return # Programdan çık
+                # --- Çıkış Bekleme ---
+                ui.console.print("\n[bold]Çıkış yapmak için Enter tuşuna basınız...[/bold]")
+                input()
+                return 
 
             except CaptchaError:
-                # Sadece Captcha yanlışsa
-                ui.show_warning("Güvenlik kodu (Captcha) yanlış girildi!")
-                if Confirm.ask("Tekrar denemek ister misin? (Bilgileri tekrar girmene gerek yok)"):
-                    continue # İç döngünün başına dön (UserConfig aynı kalır)
-                else:
-                    return # Çıkış
+                ui.show_warning("Güvenlik kodu yanlış. Tekrar deneniyor...")
+                if Confirm.ask("Tekrar denemek ister misin?"): continue
+                else: return 
 
             except CredentialError:
-                # Kullanıcı adı/şifre yanlışsa
                 ui.show_error("Kullanıcı adı veya şifre hatalı!")
-                
-                # Eğer hatalı bilgi dosyadan geldiyse dosyayı silmeliyiz
-                if is_from_file:
-                    ui.console.print("[red]Kayıtlı bilgiler hatalı olduğu için siliniyor...[/red]")
-                    ConfigManager.delete()
-                
-                ui.console.print("[cyan]Bilgileri tekrar girmelisiniz...[/cyan]")
-                break # İç döngüyü kır -> Dış döngüye git (Bilgileri tekrar sorar)
+                if is_from_file: ConfigManager.delete()
+                break 
 
             except Exception as e:
-                # Bilinmeyen hata
                 ui.show_error(f"Beklenmedik hata: {str(e)}")
+                ui.console.print("\n[bold red]Programı kapatmak için Enter'a basınız...[/bold red]")
+                input()
                 return
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nÇıkış yapıldı.")
+        pass

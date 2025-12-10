@@ -14,6 +14,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from src.services.auth_manager import AuthManager
 from src.services.obs_client import OBSClient
 from src.ui.display import DisplayManager
+from src.handlers import create_captcha_handler
 
 def main():
     # 1. YÖNETİCİLERİ BAŞLAT
@@ -71,26 +72,8 @@ def main():
     # Login Loading Animasyonu
     with ui.console.status("[bold green]OBS Sistemine Bağlanılıyor...", spinner="dots") as status:
         try:
-            def captcha_handler(path):
-                # Resmi işletim sisteminde aç
-                import os, subprocess, platform
-                if platform.system() == "Windows": os.startfile(path)
-                elif platform.system() == "Darwin": subprocess.call(("open", path))
-                else: subprocess.call(("xdg-open", path))
-                
-                ui.console.print(f"[yellow]Captcha açıldı ({path})...[/yellow]")
-                
-                # --- KRİTİK HAMLE: Animasyonu durdur ---
-                status.stop()
-                
-                # Şimdi temiz temiz input alabiliriz
-                code = ui.ask_input("İşlem sonucu: ")
-                
-                # Input bitti, animasyonu tekrar başlat
-                status.start()
-                # ---------------------------------------
-                
-                return code
+            # Handler fonksiyonunu oluştur
+            captcha_handler = create_captcha_handler(ui, status)
 
             login_success = client.login(current_user, current_pass, captcha_handler)
             

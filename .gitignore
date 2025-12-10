@@ -18,3 +18,12 @@ MTU OBS Not Görüntüleyici.spec
 /build
 /dist
 *.spec
+/dataset
+/dataset_digits
+/venv
+/src/__pycache__
+/src/ui/__pycache__
+/src/services/__pycache__
+/src/services/captcha_solver/__pycache__
+.DS_Store
+*.pyc

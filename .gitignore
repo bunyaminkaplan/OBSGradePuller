@@ -1,29 +1,56 @@
-user_config.json
-build/MTU OBS Not Görüntüleyici/Analysis-00.toc
-build/MTU OBS Not Görüntüleyici/base_library.zip
-build/MTU OBS Not Görüntüleyici/EXE-00.toc
-build/MTU OBS Not Görüntüleyici/localpycs/pyimod01_archive.pyc
-build/MTU OBS Not Görüntüleyici/localpycs/pyimod02_importers.pyc
-build/MTU OBS Not Görüntüleyici/localpycs/pyimod03_ctypes.pyc
-build/MTU OBS Not Görüntüleyici/localpycs/pyimod04_pywin32.pyc
-build/MTU OBS Not Görüntüleyici/localpycs/struct.pyc
-build/MTU OBS Not Görüntüleyici/MTU OBS Not Görüntüleyici.pkg
-build/MTU OBS Not Görüntüleyici/PKG-00.toc
-build/MTU OBS Not Görüntüleyici/PYZ-00.pyz
-build/MTU OBS Not Görüntüleyici/PYZ-00.toc
-build/MTU OBS Not Görüntüleyici/warn-MTU OBS Not Görüntüleyici.txt
-build/MTU OBS Not Görüntüleyici/xref-MTU OBS Not Görüntüleyici.html
-dist/MTU OBS Not Görüntüleyici.exe
-MTU OBS Not Görüntüleyici.spec
-/build
-/dist
-*.spec
-/dataset
-/dataset_digits
-/venv
-/src/__pycache__
-/src/ui/__pycache__
-/src/services/__pycache__
-/src/services/captcha_solver/__pycache__
-.DS_Store
+# Miscellaneous
+*.class
+*.log
+*.lock
 *.pyc
+*.swp
+*.DS_Store
+.atom/
+.buildlog/
+.history
+.svn/
+.vscode/
+
+# Flutter/Dart/Pub
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+pubspec.lock
+
+# Android
+android/**/*.gradle
+android/**/gradle-wrapper.jar
+android/.gradle
+android/captures/
+android/gradlew
+android/gradlew.bat
+android/local.properties
+android/generated/
+android/key.properties
+
+# iOS
+ios/.generated/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Flutter/app.flx
+ios/Flutter/app.zip
+ios/Flutter/flutter_assets/
+ios/Podfile.lock
+ios/Pods/
+ios/Runner.xcworkspace/
+ios/Runner.xcodeproj/project.xcworkspace/
+ios/Runner.xcodeproj/xcuserdata/
+ios/Runner/Assets.xcassets/AppIcon.appiconset/
+
+# Editors
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Visual Studio Code
+.vscode/

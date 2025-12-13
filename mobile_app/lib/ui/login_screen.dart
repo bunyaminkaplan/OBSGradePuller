@@ -636,7 +636,16 @@ class _LoginScreenState extends State<LoginScreen>
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(11),
                   child: _captchaImage != null
-                      ? Image.memory(_captchaImage!, fit: BoxFit.fill)
+                      ? Image.memory(
+                          _captchaImage!,
+                          fit: BoxFit.fill,
+                          errorBuilder: (context, error, stackTrace) {
+                            return Container(
+                              color: Colors.red[100],
+                              child: const Icon(Icons.broken_image, color: Colors.red),
+                            );
+                          },
+                        )
                       : Shimmer.fromColors(
                           baseColor: Colors.grey[300]!,
                           highlightColor: Colors.grey[100]!,

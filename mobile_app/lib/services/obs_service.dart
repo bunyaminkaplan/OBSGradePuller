@@ -4,24 +4,53 @@ import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:html/parser.dart' show parse;
 import '../core/constants.dart';
+import 'storage_service.dart'; // Import storage service
 import '../models/grade.dart';
 import 'captcha_service.dart';
 
 class ObsService {
-  late Dio _dio;
+  final Dio _dio = Dio(); // Changed from late to final and initialized
   late CookieJar _cookieJar;
   final CaptchaService _captchaService = CaptchaService();
+
+  // Cache hidden inputs
+  final StorageService _storageService = StorageService();
+
+  String _baseUrl = "https://obs.ozal.edu.tr"; // Added
+  final String _ozalUrl = "https://obs.ozal.edu.tr"; // Added
+  final String _inonuUrl = "https://obs.inonu.edu.tr"; // Added
 
   // Cache hidden inputs for ViewState etc.
   Map<String, String> _hiddenInputs = {};
 
+  Future<String> toggleUniversity() async {
+    String newName;
+    if (_baseUrl == _ozalUrl) {
+      _baseUrl = _inonuUrl;
+      newName = "İnönü Üniversitesi";
+    } else {
+      _baseUrl = _ozalUrl;
+      newName = "Turgut Özal Üniversitesi";
+    }
+    // Save to storage
+    await _storageService.saveUniversityUrl(_baseUrl);
+    return newName;
+  }
+
+  Future<void> loadSavedUrl() async {
+    String? saved = await _storageService.getUniversityUrl();
+    if (saved != null && (saved == _ozalUrl || saved == _inonuUrl)) {
+      _baseUrl = saved;
+    }
+  }
+
   ObsService() {
-    _dio = Dio();
+    // _dio = Dio(); // Removed as _dio is now final and initialized at declaration
     _dio.options.headers = {
       'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': AppConstants.obsLoginUrl,
-      'Origin': 'https://obs.ozal.edu.tr',
+      'Referer': "$_baseUrl/oibs/std/login.aspx",
+      'Origin': _baseUrl,
       'Cache-Control': 'no-cache',
     };
 
@@ -70,8 +99,9 @@ class ObsService {
   /// 1. Fetch Login Page
   Future<Uint8List?> fetchLoginPage() async {
     try {
-      print("Fetching Login Page: ${AppConstants.obsLoginUrl}");
-      Response response = await _dio.get(AppConstants.obsLoginUrl);
+      String loginUrl = "$_baseUrl/oibs/std/login.aspx";
+      print("Fetching Login Page: $loginUrl");
+      Response response = await _dio.get(loginUrl);
 
       var document = parse(response.data);
 
@@ -88,11 +118,9 @@ class ObsService {
       if (img != null) {
         String? src = img.attributes['src'];
         if (src != null) {
-          String fullUrl =
-              "https://obs.ozal.edu.tr/oibs/captcha/CaptchaImg.aspx";
+          String fullUrl = "$_baseUrl/oibs/captcha/CaptchaImg.aspx";
           if (!src.startsWith("..")) {
-            fullUrl =
-                "https://obs.ozal.edu.tr/oibs/" + src.replaceAll("../", "");
+            fullUrl = "$_baseUrl/oibs/" + src.replaceAll("../", "");
           }
           Response<List<int>> imgResponse = await _dio.get<List<int>>(
             fullUrl,
@@ -143,7 +171,7 @@ class ObsService {
           // Cookies are auto-handled by CookieManager from the 302 response
           String fullUrl = location.startsWith("http")
               ? location
-              : "https://obs.ozal.edu.tr" + location;
+              : _baseUrl + location;
 
           Response nextResponse = await _dio.get(fullUrl);
           print("Redirect Target Status: ${nextResponse.statusCode}");
@@ -168,7 +196,7 @@ class ObsService {
   /// 3. Fetch Grades (Returns Grades + Terms Info)
   Future<Map<String, dynamic>> fetchGradesData({String? termId}) async {
     try {
-      String gradesUrl = "https://obs.ozal.edu.tr/oibs/std/not_listesi_op.aspx";
+      String gradesUrl = "$_baseUrl/oibs/std/not_listesi_op.aspx";
       _dio.options.headers['Referer'] = gradesUrl;
 
       // If a specific term is requested, we might need to POST
@@ -357,7 +385,7 @@ class ObsService {
 
     try {
       // 1. Trigger AJAX
-      String gradesUrl = "https://obs.ozal.edu.tr/oibs/std/not_listesi_op.aspx";
+      String gradesUrl = "$_baseUrl/oibs/std/not_listesi_op.aspx";
 
       // ... (Logic from before)
       Map<String, dynamic> payload = Map.from(_hiddenInputs);
@@ -377,8 +405,7 @@ class ObsService {
       );
 
       // 2. Fetch Stats Page
-      String statsUrl =
-          "https://obs.ozal.edu.tr/oibs/acd/new_not_giris_istatistik.aspx";
+      String statsUrl = "$_baseUrl/oibs/acd/new_not_giris_istatistik.aspx";
       Response statRes = await _dio.get(statsUrl);
       var soup = parse(statRes.data);
       var allRows = soup.querySelectorAll('tr');
@@ -464,7 +491,7 @@ class ObsService {
       payload['__EVENTARGUMENT'] = '';
 
       await _dio.post(
-        "https://obs.ozal.edu.tr/oibs/std/not_listesi_op.aspx",
+        "$_baseUrl/oibs/std/not_listesi_op.aspx",
         data: FormData.fromMap(payload),
         options: Options(
           responseType: ResponseType.plain,

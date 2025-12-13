@@ -10,6 +10,8 @@ class StorageService {
 
   // New Key
   static const _keyProfiles = 'obs_profiles';
+  // Hint Persistence
+  static const _keyHintShown = 'hint_shown_v1';
 
   /// Returns list of stored profiles: [{'username': '...', 'password': '...', 'alias': '...'}]
   Future<List<Map<String, String>>> getProfiles() async {
@@ -51,6 +53,28 @@ class StorageService {
     await _storage.write(key: _keyProfiles, value: jsonEncode(profiles));
   }
 
+  // --- HINT PERSISTENCE ---
+
+  Future<bool> shouldShowHint() async {
+    String? val = await _storage.read(key: _keyHintShown);
+    return val != 'true';
+  }
+
+  Future<void> setHintShown() async {
+    await _storage.write(key: _keyHintShown, value: 'true');
+  }
+
+  // --- UNIVERSITY PERSISTENCE ---
+  static const _keyUniUrl = 'uni_base_url_v1';
+
+  Future<String?> getUniversityUrl() async {
+    return await _storage.read(key: _keyUniUrl);
+  }
+
+  Future<void> saveUniversityUrl(String url) async {
+    await _storage.write(key: _keyUniUrl, value: url);
+  }
+
   Future<void> _migrateLegacyData() async {
     String? oldUser = await _storage.read(key: _keyUserLegacy);
     String? oldPass = await _storage.read(key: _keyPassLegacy);
@@ -78,10 +102,5 @@ class StorageService {
       await _storage.delete(key: _keyUserLegacy);
       await _storage.delete(key: _keyPassLegacy);
     }
-  }
-
-  // Backwards compatibility helper (optional, can remove if unused)
-  Future<void> clearAll() async {
-    await _storage.deleteAll();
   }
 }

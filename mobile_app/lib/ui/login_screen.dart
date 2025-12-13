@@ -1,5 +1,7 @@
 import 'dart:math' as math; // For random shake
 import 'dart:typed_data';
+import 'dart:async'; // For Timer Easter Egg
+import 'package:flutter/services.dart'; // For HapticFeedback
 import 'dart:ui'; // For ImageFilter
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -41,6 +43,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _showMenu = false;
   int? _hoveredIndex;
   bool _showHint = true; // Show hint initially
+  Timer? _easterEggTimer; // For 5s hold
 
   @override
   void initState() {
@@ -77,6 +80,7 @@ class _LoginScreenState extends State<LoginScreen>
     _passController.dispose();
     _captchaController.dispose();
     _aliasController.dispose();
+    _easterEggTimer?.cancel();
     super.dispose();
   }
 
@@ -90,9 +94,18 @@ class _LoginScreenState extends State<LoginScreen>
       }
     }
 
+    // Check persistence for hint
+    final showHint = await _storage.shouldShowHint();
+
+    // RESTORE SAVED UNIVERSITY
+    if (mounted) {
+      await context.read<ObsService>().loadSavedUrl();
+    }
+
     if (mounted) {
       setState(() {
         _profiles = list;
+        _showHint = showHint; // Set based on storage
         if (_profiles.isEmpty) {
           _showManualLogin = true;
           _loadCaptcha();
@@ -245,37 +258,64 @@ class _LoginScreenState extends State<LoginScreen>
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     // WATER RIPPLE LOGO
-                    SizedBox(
-                      width: 180, // Slightly larger paint area
-                      height: 180,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          AnimatedBuilder(
-                            animation: _rippleController,
-                            builder: (context, child) {
-                              return CustomPaint(
-                                painter: RipplePainter(
-                                  _rippleController.value,
-                                  Colors.blueAccent,
+                    Listener(
+                      onPointerDown: (_) {
+                        _easterEggTimer?.cancel();
+                        _easterEggTimer = Timer(
+                          const Duration(seconds: 5),
+                          () async {
+                            // Trigger
+                            final obs = context.read<ObsService>();
+                            final uniName = await obs.toggleUniversity();
+                            if (mounted) {
+                              HapticFeedback.heavyImpact();
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text("$uniName Moduna Geçildi"),
+                                  backgroundColor: Colors.blueAccent,
+                                  behavior: SnackBarBehavior.floating,
                                 ),
-                                child: Container(width: 180, height: 180),
                               );
-                            },
-                          ),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.blueAccent.withOpacity(0.1),
-                              shape: BoxShape.circle,
+                              // Refresh captcha immediately for new university
+                              _loadCaptcha();
+                            }
+                          },
+                        );
+                      },
+                      onPointerUp: (_) => _easterEggTimer?.cancel(),
+                      onPointerCancel: (_) => _easterEggTimer?.cancel(),
+                      child: SizedBox(
+                        width: 180, // Slightly larger paint area
+                        height: 180,
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            AnimatedBuilder(
+                              animation: _rippleController,
+                              builder: (context, child) {
+                                return CustomPaint(
+                                  painter: RipplePainter(
+                                    _rippleController.value,
+                                    Colors.blueAccent,
+                                  ),
+                                  child: Container(width: 180, height: 180),
+                                );
+                              },
                             ),
-                            child: const Icon(
-                              Icons.school_rounded,
-                              size: 64,
-                              color: Colors.blueAccent,
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.blueAccent.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.school_rounded,
+                                size: 64,
+                                color: Colors.blueAccent,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
 
@@ -384,6 +424,8 @@ class _LoginScreenState extends State<LoginScreen>
               if (_hoveredIndex != null &&
                   _hoveredIndex! >= 0 &&
                   _hoveredIndex! < _profiles.length) {
+                // User successfully used the feature
+                _storage.setHintShown();
                 final p = _profiles[_hoveredIndex!];
                 _login(user: p['username'], pass: p['password']);
               }
@@ -642,7 +684,10 @@ class _LoginScreenState extends State<LoginScreen>
                           errorBuilder: (context, error, stackTrace) {
                             return Container(
                               color: Colors.red[100],
-                              child: const Icon(Icons.broken_image, color: Colors.red),
+                              child: const Icon(
+                                Icons.broken_image,
+                                color: Colors.red,
+                              ),
                             );
                           },
                         )
